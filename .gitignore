@@ -1,0 +1,22 @@
+# Build artifacts & Executables
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dll
+*.exe
+a.out
+STABBING
+
+# Results and checkpoints
+stabbing*_results.txt
+stabbing*_checkpoint.txt
+
+# Editor, OS, and Temporary junk
+*.zip
+*.swp
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
