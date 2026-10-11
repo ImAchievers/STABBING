@@ -6,10 +6,10 @@ Measures the biome touching 0, 0 in 1:4 cells and Blocks^2 for every seed in ord
 
 Settings to adjust in the #defines before compiling:
 
-    START_SEED	Starting seed for a new run
-    THREADS	Worker threads, adjust for your PC
-    LB		1 for Large Biomes
-    Y_LEVEL	Y-level to sample at, 256 for the surface
+    START_SEED    Starting seed for a new run
+    THREADS       Worker threads, adjust for your PC
+    LB            1 for Large Biomes
+    Y_LEVEL       Y-level to sample at, 256 for the surface
 
 MSYS2/MinGW on Windows, or Linux:
 
@@ -17,9 +17,9 @@ MSYS2/MinGW on Windows, or Linux:
 
 ## Usage
 
-    ./STABBING.exe			start from the checkpoint, or the START_SEED #define if there isn't one
-    ./STABBING.exe <seed>		start from this seed instead
-    ./STABBING.exe single <seed>	measure one seed and print it like measure.exe
+    ./STABBING.exe                  start from the checkpoint, or the START_SEED #define if there isn't one
+    ./STABBING.exe <seed>           start from this seed instead
+    ./STABBING.exe single <seed>    measure one seed and print it like measure.exe
 
 ## Output
 
