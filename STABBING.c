@@ -9,6 +9,7 @@
 #include <stdatomic.h>
 
 #include "generator.h"
+#include "tables/btree263.h"
 
 #define MC_VERSION MC_NEWEST
 #define START_SEED 0LL
@@ -183,12 +184,94 @@ static void spush(Ctx *c, int x, int z)
     c->stx[c->sn] = x; c->stz[c->sn] = z; c->sn++;
 }
 
+/* the biome tree as a lookup table, based on the JUNO Project genlut.c by bryce219 */
+static const int LUT_AXIS[5] = {0, 1, 2, 3, 5};
+static int32_t g_cut[5][64];
+static int g_ncut[5];
+static long g_cells;
+static uint8_t *g_lut;
+static atomic_long g_lutnext;
+
+static int cmp_int(const void *a, const void *b)
+{
+    int32_t x = *(const int32_t *)a, y = *(const int32_t *)b;
+    return (x > y) - (x < y);
+}
+
+static void *lut_worker(void *arg)
+{
+    (void)arg;
+    long i;
+    while ((i = atomic_fetch_add(&g_lutnext, 4096)) < g_cells)
+    {
+        long end = i + 4096 < g_cells ? i + 4096 : g_cells;
+        for (; i < end; i++)
+        {
+            uint64_t np[6];
+            long r = i;
+            for (int a = 4; a >= 0; a--)
+            {
+                int c = (int)(r % (g_ncut[a] + 1));
+                r /= g_ncut[a] + 1;
+                np[LUT_AXIS[a]] = (uint64_t)(int64_t)(c ? g_cut[a][c - 1] : g_cut[a][0] - 1);
+            }
+            np[4] = (uint64_t)(int64_t)-15000;
+            g_lut[i] = (uint8_t)climateToBiome(MC_VERSION, np, NULL);
+        }
+    }
+    return NULL;
+}
+
+static void build_lut(void)
+{
+    int n = sizeof(btree263_nodes) / sizeof(uint64_t);
+    int32_t *e = malloc(2 * n * sizeof(int32_t));
+    g_cells = 1;
+    for (int a = 0; a < 5; a++)
+    {
+        int m = 0;
+        for (int i = 0; i < n; i++)
+        {
+            if ((btree263_nodes[i] >> 48) < (uint64_t)n) continue;
+            int p = (btree263_nodes[i] >> (8 * LUT_AXIS[a])) & 0xff;
+            e[m++] = btree263_param[p][0];
+            e[m++] = btree263_param[p][1] + 1;
+        }
+        qsort(e, m, sizeof(int32_t), cmp_int);
+        g_ncut[a] = 0;
+        for (int i = 0; i < m; i++)
+            if (!i || e[i] != e[i - 1]) g_cut[a][g_ncut[a]++] = e[i];
+        g_cells *= g_ncut[a] + 1;
+    }
+    free(e);
+    g_lut = malloc(g_cells);
+    atomic_store(&g_lutnext, 0);
+    pthread_t th[THREADS];
+    for (int t = 0; t < THREADS; t++) pthread_create(&th[t], NULL, lut_worker, NULL);
+    for (int t = 0; t < THREADS; t++) pthread_join(th[t], NULL);
+}
+
+static int lut_biome(int mc, int64_t *np)
+{
+    if (np[4] > 0 || mc != MC_26_3) return climateToBiome(mc, (const uint64_t *)np, NULL);
+    long i = 0;
+    for (int a = 0; a < 5; a++)
+    {
+        int64_t v = np[LUT_AXIS[a]];
+        int c = 0;
+        while (c < g_ncut[a] && v >= g_cut[a][c]) c++;
+        if (c == 0 || c == g_ncut[a]) return climateToBiome(mc, (const uint64_t *)np, NULL);
+        i = i * (g_ncut[a] + 1) + c;
+    }
+    return g_lut[i];
+}
+
 /* rivers generate where weirdness is within 0.05 of 0, this decides what would generate if the river didn't exist */
 static int under_river(Generator *g, int64_t *np)
 {
     if (np[5] > 500 || np[5] < -500) return -1;
     np[5] = np[5] >= 0 ? 501 : -501;
-    return climateToBiome(g->mc, (const uint64_t *)np, NULL);
+    return lut_biome(g->mc, np);
 }
 
 static Ctx *ctx_new(void)
@@ -241,7 +324,8 @@ static long long measure(Ctx *c, uint64_t seed, int *biome)
     {
         c->sn--;
         int x = c->stx[c->sn], z = c->stz[c->sn];
-        int bm = sampleBiomeNoise(&g->bn, np, x, SY, z, NULL, 0);
+        sampleBiomeNoise(&g->bn, np, x, SY, z, NULL, SAMPLE_NO_BIOME);
+        int bm = lut_biome(g->mc, np);
         if (bm == target) { if (++count >= MAX_CELLS) return -1; }
         else if (!bridge || (bm != river && bm != frozen_river && bm != b0 && bm != b1) || under_river(g, np) != target) continue;
         for (int i = 0; i < 4; i++)
@@ -357,7 +441,7 @@ static void *statmon(void *a)
         if (el < 60) snprintf(ts, sizeof ts, "%.0fs", el);
         else if (el < 3600) snprintf(ts, sizeof ts, "%.1fm", el / 60);
         else snprintf(ts, sizeof ts, "%.1fh", el / 3600);
-        fprintf(stderr, "[%s] %.2fM  %.0f/s | Current Seed: %lld | Best=%s %lld %lld\n",
+        fprintf(stderr, "[%s] %.2fM | %.0f/s | Current Seed: %lld | Best=%s %lld %lld\n",
             ts, seeds / 1e6, (seeds - last) / dt, g_start + seeds, biome_name(bb), bs, best);
         last = seeds; tl = tn;
     }
@@ -366,6 +450,7 @@ static void *statmon(void *a)
 
 int main(int argc, char *argv[])
 {
+    build_lut();
     if (argc >= 3 && !strcmp(argv[1], "single"))
     {
         Ctx *c = ctx_new();
