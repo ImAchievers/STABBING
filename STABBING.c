@@ -16,6 +16,9 @@
 #define THREADS 18
 #define LB 0
 #define Y_LEVEL 256
+#define TARGETS -1
+#define EXCLUDE -1
+#define MIN_SIZE 0
 #define SY (Y_LEVEL >> 2)
 #define TILE 64
 #define TBITS 6
@@ -108,6 +111,10 @@ static const uint8_t BRIDGE[256] = {
     [grove] = 1,
     [snowy_slopes] = 1,
 };
+
+static const int TARGET_LIST[] = { TARGETS };
+static const int EXCLUDE_LIST[] = { EXCLUDE };
+static uint8_t g_want[256];
 
 static inline int64_t tkey(int tx, int tz){ return ((int64_t)(uint32_t)tx << 32) | (uint32_t)tz; }
 static inline uint64_t mix(uint64_t x){ x ^= x>>30; x *= 0xbf58476d1ce4e5b9ULL; x ^= x>>27; x *= 0x94d049bb133111ebULL; x ^= x>>31; return x; }
@@ -281,8 +288,8 @@ static Ctx *ctx_new(void)
     return c;
 }
 
-/* measures the biome touching 0 0, returns its 1:4 size (or -1 if it hits MAX_CELLS) */
-static long long measure(Ctx *c, uint64_t seed, int *biome)
+/* measures the biome touching 0 0, returns its 1:4 size (or -1 if it hits MAX_CELLS, -2 if it's skipped) */
+static long long measure(Ctx *c, uint64_t seed, int *biome, int any)
 {
     Generator *g = &c->g;
     applySeed(g, DIM_OVERWORLD, seed);
@@ -303,6 +310,7 @@ static long long measure(Ctx *c, uint64_t seed, int *biome)
         if (!found) target = getBiomeAt(g, 4, scx, SY, scz);
     }
     *biome = target;
+    if (!any && (target < 0 || target > 255 || !g_want[target])) return -2;
 
     int bridge = target >= 0 && target < 256 && BRIDGE[target];
     /* grove/snowy slopes generate these instead of rivers */
@@ -369,10 +377,13 @@ static void flush_results(void)
     while (atomic_load(&rdone[i = (uint64_t)h & (RING - 1)]))
     {
         long long n = rsize[i];
-        if (n < 0) fprintf(stderr, "%lld: patch exceeds %lld cells\n", h, MAX_CELLS);
-        fprintf(g_out, "%lld ", h);
-        for (const char *nm = biome_name(rbiome[i]); *nm; nm++) fputc(*nm == ' ' ? '_' : *nm, g_out);
-        fprintf(g_out, " %lld %lld\n", n, n < 0 ? n : n * 16);
+        if (n == -1) fprintf(stderr, "%lld: patch exceeds %lld cells\n", h, MAX_CELLS);
+        if (n == -1 || n >= MIN_SIZE)
+        {
+            fprintf(g_out, "%lld ", h);
+            for (const char *nm = biome_name(rbiome[i]); *nm; nm++) fputc(*nm == ' ' ? '_' : *nm, g_out);
+            fprintf(g_out, " %lld %lld\n", n, n < 0 ? n : n * 16);
+        }
         if (n > g_best) { g_best = n; g_bestseed = h; g_bestbiome = rbiome[i]; }
         atomic_store(&rdone[i], 0);
         h++;
@@ -391,7 +402,7 @@ static void *worker(void *a)
         while (s - atomic_load(&g_head) >= RING && !g_stop) usleep(1000);
         if (g_stop) break;
         int bm;
-        long long n = measure(c, (uint64_t)s, &bm);
+        long long n = measure(c, (uint64_t)s, &bm, 0);
         size_t i = (uint64_t)s & (RING - 1);
         rsize[i] = n; rbiome[i] = (int16_t)bm;
         atomic_store(&rdone[i], 1);
@@ -455,7 +466,7 @@ int main(int argc, char *argv[])
     {
         Ctx *c = ctx_new();
         int bm;
-        long long n = measure(c, (uint64_t)strtoll(argv[2], NULL, 10), &bm);
+        long long n = measure(c, (uint64_t)strtoll(argv[2], NULL, 10), &bm, 1);
         if (n < 0)
         {
             fprintf(stderr, "patch exceeds %lld cells; check Y_LEVEL\n", MAX_CELLS);
@@ -467,10 +478,22 @@ int main(int argc, char *argv[])
         return 0;
     }
 
-    /* LB and other y levels get their own results and checkpoint */
+    int ntarget = sizeof TARGET_LIST / sizeof TARGET_LIST[0];
+    int nexclude = sizeof EXCLUDE_LIST / sizeof EXCLUDE_LIST[0];
+    for (int i = 0; i < ntarget; i++)
+    {
+        if (TARGET_LIST[i] < 0) memset(g_want, 1, sizeof g_want);
+        else if (TARGET_LIST[i] < 256) g_want[TARGET_LIST[i]] = 1;
+    }
+    for (int i = 0; i < nexclude; i++)
+        if (EXCLUDE_LIST[i] >= 0 && EXCLUDE_LIST[i] < 256) g_want[EXCLUDE_LIST[i]] = 0;
+    int all = TARGET_LIST[0] < 0 && EXCLUDE_LIST[0] < 0;
+
+    /* LB, other y levels, and target runs get their own results and checkpoint */
     char tag[32] = "";
     if (LB) strcat(tag, "_LB");
     if (Y_LEVEL != 256) snprintf(tag + strlen(tag), sizeof tag - strlen(tag), "_y%d", Y_LEVEL);
+    if (!all) strcat(tag, "_targets");
     snprintf(g_results, sizeof g_results, RESULTS_FILE, tag);
     snprintf(g_ckpt, sizeof g_ckpt, CHECKPOINT_FILE, tag);
 
@@ -495,7 +518,18 @@ int main(int argc, char *argv[])
     if (!g_out) { perror(g_results); return 1; }
     fseek(g_out, 0, SEEK_END);
     if (ftell(g_out) == 0) fprintf(g_out, "Seed | Biome | 1:4 Size | Blocks^2 Size\n");
-    fprintf(stderr, "%s %lld | %d threads\n", resumed ? "Resume from" : "Start from", start, THREADS);
+    fprintf(stderr, "%s %lld | %d threads", resumed ? "Resume from" : "Start from", start, THREADS);
+    if (TARGET_LIST[0] >= 0)
+    {
+        fprintf(stderr, " | Targets:");
+        for (int i = 0; i < ntarget; i++) fprintf(stderr, "%s %s", i ? "," : "", biome_name(TARGET_LIST[i]));
+    }
+    if (EXCLUDE_LIST[0] >= 0)
+    {
+        fprintf(stderr, " | Excluding:");
+        for (int i = 0; i < nexclude; i++) fprintf(stderr, "%s %s", i ? "," : "", biome_name(EXCLUDE_LIST[i]));
+    }
+    fprintf(stderr, "\n");
 
     signal(SIGINT, on_sigint);
     pthread_t th[THREADS], cth, sth;
