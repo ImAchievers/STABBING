@@ -12,7 +12,7 @@ Settings to adjust in the #defines before compiling:
     Y_LEVEL       Y-level to sample at, 256 for the surface
     TARGETS       Biomes to measure, set to -1 to search all of them. Must be lowercase biome names separated by commas and an underscore if multiple words (desert, eroded_badlands)
     EXCLUDE       Biomes to skip, -1 for none. Same format as TARGETS (river, deep_ocean)
-    MIN_SIZE      Minimum size in 1:4 cells to write to the output file, keep at 0 to keep write everything
+    MIN_SIZE      Minimum size in 1:4 cells to write to the output file, keep at 0 to write everything
 
 MSYS2/MinGW on Windows, or Linux:
 
@@ -31,7 +31,7 @@ files (stabbing_LB_results.txt, stabbing_y0_results.txt, stabbing_targets_result
 
 With the TARGETS or EXCLUDE defines set, seeds whose biome at 0, 0 isn't searched are skipped without measuring. Unfortunately the way I needed to do this is a bit confusing, but a biome in both lists is skipped.
 
-So for example, if you only wanted to search for coast biomes set the TARGETS define to:
+So for example, if you only wanted to search for coast biomes set the new defines to:
 
     #define TARGETS beach, snowy_beach, stony_shore
     #define EXCLUDE -1
@@ -40,6 +40,12 @@ or if you want a Best: in the status line that isn't a desert (lmao) set them to
 
     #define TARGETS -1
     #define EXCLUDE desert
+
+or if you want to find a specific sized biome like a 200k+ 1:4 Warm Ocean, set them to:
+
+    #define TARGETS warm_ocean
+    #define EXCLUDE -1
+    #define MIN_SIZE 200000
 
 With MIN_SIZE set, any measurements below that threshold aren't written to the results file, but still count for the status line's Best.
 
