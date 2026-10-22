@@ -20,9 +20,10 @@ MSYS2/MinGW on Windows, or Linux:
 
 ## Usage
 
-    ./STABBING.exe                  start from the checkpoint, or the START_SEED #define if there isn't one
-    ./STABBING.exe <seed>           start from this seed instead
-    ./STABBING.exe single <seed>    measure one seed and print it like measure.exe
+    ./STABBING.exe                      start from the checkpoint, or the START_SEED #define if there isn't one
+    ./STABBING.exe <seed>               start from this seed instead
+    ./STABBING.exe [seed] run <seeds>   search this many seeds then stop, from the seed given or the checkpoint
+    ./STABBING.exe single <seed>        measure one seed and print it like measure.exe
 
 ## Output
 
@@ -50,7 +51,7 @@ or if you want to find a specific sized biome like a 200k+ 1:4 Warm Ocean, set t
 With MIN_SIZE set, any measurements below that threshold aren't written to the results file, but still count for the status line's Best.
 
 Lines are written in seed order no matter which thread finishes first. stabbing_checkpoint.txt is saved every 30 seconds and on Ctrl+C,
-so stopping with Ctrl+C never skips/repeats a seed.
+so stopping with Ctrl+C never skips/repeats a seed. A run started with the run flag stops and saves the same way when it's done.
 
 The status line every 20 seconds shows seeds/s, the seed it's on, and the biggest measurement so far.
 

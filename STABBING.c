@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 #include <time.h>
 #include <signal.h>
 #include <unistd.h>
@@ -358,6 +359,7 @@ static long long rsize[RING];
 static int16_t rbiome[RING];
 static atomic_char rdone[RING];
 static atomic_llong g_next, g_head;
+static long long g_end = LLONG_MAX;
 static long long g_start, g_best = -1, g_bestseed;
 static int g_bestbiome;
 static pthread_mutex_t g_outmtx = PTHREAD_MUTEX_INITIALIZER;
@@ -399,6 +401,7 @@ static void *worker(void *a)
     while (!g_stop)
     {
         long long s = atomic_fetch_add(&g_next, 1);
+        if (s >= g_end) break;
         while (s - atomic_load(&g_head) >= RING && !g_stop) usleep(1000);
         if (g_stop) break;
         int bm;
@@ -459,6 +462,13 @@ static void *statmon(void *a)
     return NULL;
 }
 
+static int is_num(const char *s)
+{
+    char *e;
+    strtoll(s, &e, 10);
+    return *s && !*e;
+}
+
 int main(int argc, char *argv[])
 {
     build_lut();
@@ -497,10 +507,16 @@ int main(int argc, char *argv[])
     snprintf(g_results, sizeof g_results, RESULTS_FILE, tag);
     snprintf(g_ckpt, sizeof g_ckpt, CHECKPOINT_FILE, tag);
 
-    long long start = START_SEED;
-    int resumed = 0;
-    if (argc >= 2) start = strtoll(argv[1], NULL, 10);
-    else
+    long long start = START_SEED, run = 0;
+    int resumed = 0, a = 1, given = argc > 1 && strcmp(argv[1], "run");
+    if (given) start = strtoll(argv[a++], NULL, 10);
+    if (argc == a + 2 && !strcmp(argv[a], "run") && is_num(argv[a + 1])) run = strtoll(argv[a + 1], NULL, 10);
+    if ((given && !is_num(argv[1])) || (argc > a && run <= 0))
+    {
+        fprintf(stderr, "usage: %s [seed] [run <seeds>] | single <seed>\n", argv[0]);
+        return 1;
+    }
+    if (!given)
     {
         FILE *cf = fopen(g_ckpt, "r");
         if (cf)
@@ -511,6 +527,7 @@ int main(int argc, char *argv[])
         }
     }
     g_start = start;
+    if (run > 0 && start < LLONG_MAX - run) g_end = start + run;
     atomic_store(&g_next, start);
     atomic_store(&g_head, start);
 
@@ -519,6 +536,7 @@ int main(int argc, char *argv[])
     fseek(g_out, 0, SEEK_END);
     if (ftell(g_out) == 0) fprintf(g_out, "Seed | Biome | 1:4 Size | Blocks^2 Size\n");
     fprintf(stderr, "%s %lld | %d threads", resumed ? "Resume from" : "Start from", start, THREADS);
+    if (run > 0) fprintf(stderr, " | Run: %lld seeds", run);
     if (TARGET_LIST[0] >= 0)
     {
         fprintf(stderr, " | Targets:");
