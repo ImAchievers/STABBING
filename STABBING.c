@@ -9,6 +9,15 @@
 #include <pthread.h>
 #include <stdatomic.h>
 
+#ifdef _WIN32
+#include <io.h>
+#define file_tell(f) _ftelli64(f)
+#define file_cut(f, n) _chsize_s(_fileno(f), n)
+#else
+#define file_tell(f) ftello(f)
+#define file_cut(f, n) ftruncate(fileno(f), n)
+#endif
+
 #include "generator.h"
 #include "tables/btree263.h"
 
@@ -352,7 +361,8 @@ static long long measure(Ctx *c, uint64_t seed, int *biome, int any)
 }
 
 static volatile sig_atomic_t g_stop = 0;
-static void on_sigint(int sig) { (void)sig; g_stop = 1; }
+/* windows puts the default handler back after each ctrl+c, so a second one would kill the run before it saves */
+static void on_sigint(int sig) { signal(sig, on_sigint); g_stop = 1; }
 
 /* finished seeds wait here until every seed before them is done, so the file stays in order */
 static long long rsize[RING];
@@ -414,12 +424,16 @@ static void *worker(void *a)
     return NULL;
 }
 
+/* the next seed and how long the results file was at that point */
 static void write_checkpoint(void)
 {
     pthread_mutex_lock(&g_outmtx);
-    fflush(g_out);
-    FILE *f = fopen(g_ckpt, "w");
-    if (f) { fprintf(f, "%lld\n", atomic_load(&g_head)); fclose(f); }
+    if (g_out)
+    {
+        fflush(g_out);
+        FILE *f = fopen(g_ckpt, "w");
+        if (f) { fprintf(f, "%lld %lld\n", atomic_load(&g_head), (long long)file_tell(g_out)); fclose(f); }
+    }
     pthread_mutex_unlock(&g_outmtx);
 }
 
@@ -516,14 +530,27 @@ int main(int argc, char *argv[])
         fprintf(stderr, "usage: %s [seed] [run <seeds>] | single <seed>\n", argv[0]);
         return 1;
     }
+    long long len = -1;
     if (!given)
     {
         FILE *cf = fopen(g_ckpt, "r");
         if (cf)
         {
             long long v;
-            if (fscanf(cf, "%lld", &v) == 1 && v > start) { start = v; resumed = 1; }
+            if (fscanf(cf, "%lld %lld", &v, &len) >= 1 && v > start) { start = v; resumed = 1; }
             fclose(cf);
+        }
+    }
+    /* anything written after the checkpoint gets measured again, so if the last run was killed without saving
+     * (window closed, crash, power outage) those lines and any half written one are cut off first */
+    if (resumed && len >= 0)
+    {
+        FILE *rf = fopen(g_results, "r+");
+        if (rf)
+        {
+            fseek(rf, 0, SEEK_END);
+            if (file_tell(rf) > len && file_cut(rf, len)) perror(g_results);
+            fclose(rf);
         }
     }
     g_start = start;
@@ -558,6 +585,9 @@ int main(int argc, char *argv[])
     g_stop = 1;
     write_checkpoint();
     fprintf(stderr, "Done: %lld seeds | Resume at: %lld\n", atomic_load(&g_head) - start, atomic_load(&g_head));
+    pthread_mutex_lock(&g_outmtx);
     fclose(g_out);
+    g_out = NULL;
+    pthread_mutex_unlock(&g_outmtx);
     return 0;
 }

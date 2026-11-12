@@ -52,6 +52,8 @@ With MIN_SIZE set, any measurements below that threshold aren't written to the r
 
 Lines are written in seed order no matter which thread finishes first. stabbing_checkpoint.txt is saved every 30 seconds and on Ctrl+C,
 so stopping with Ctrl+C never skips/repeats a seed. A run started with the run flag stops and saves the same way when it's done.
+If a run is killed without Ctrl+C (closing the window, a crash, the PC turning off) the next run cuts the results file back to
+where the checkpoint was saved, so a half written last line or repeated seeds never end up in it.
 
 The status line every 20 seconds shows seeds/s, the seed it's on, and the biggest measurement so far.
 
